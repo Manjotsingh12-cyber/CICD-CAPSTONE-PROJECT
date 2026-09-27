@@ -4,24 +4,9 @@ pipeline {
     agent any
     parameters {
         choice(
-            name: 'BUILD_MODE',
-            choices: ['With Docker', 'Without Docker'],
-            description: 'Choose whether to build a Docker image'
-        )
-        choice(
             name: 'TARGET_ENV',
-            choices: ['node-2-dev', 'node-2-qa'],
-            description: 'Choose which environment to deploy to'
-        )
-        booleanParam(
-            name: 'RUN_TESTS',
-            defaultValue: true,
-            description: 'Run test suite before deploying?'
-        )
-        string(
-            name: 'RELEASE_NOTES',
-            defaultValue: '',
-            description: 'Optional release notes for this build'
+            choices: ['dev', 'qa'],
+            description: 'Environment to deploy to'
         )
     }
     stages {
@@ -30,19 +15,40 @@ pipeline {
                 sayHello('Manjot')
             }
         }
-        stage('Info') {
+        stage('Compute Version') {
             steps {
-                echo "Branch: ${env.BRANCH_NAME}"
-                echo "Build mode: ${params.BUILD_MODE}"
-                echo "Target environment: ${params.TARGET_ENV}"
+                script {
+                    env.APP_VERSION = generateVersion(env.BUILD_NUMBER)
+                    echo "App version for this build: ${env.APP_VERSION}"
+                }
             }
         }
-        stage('Test') {
-            when {
-                expression { return params.RUN_TESTS == true }
-            }
+        stage('Show Deployment Info') {
             steps {
-                sh 'python3 check.py'
+                deploymentInfo(
+                    environment: params.TARGET_ENV,
+                    port: 8000,
+                    version: env.APP_VERSION
+                )
+            }
+        }
+        stage('Deploy') {
+            steps {
+                echo "Deploying version ${env.APP_VERSION} to ${params.TARGET_ENV}..."
+                sh 'docker rm -f blue-green-test || true'
+                sh 'docker run -d --name blue-green-test -p 8005:80 nginx'
+                sh 'sleep 2'
+            }
+        }
+        stage('Validate') {
+            steps {
+                script {
+                    def healthy = healthCheck('http://localhost:8005', 5)
+                    if (!healthy) {
+                        error("Deployment validation failed for version ${env.APP_VERSION}")
+                    }
+                    echo "Deployment of version ${env.APP_VERSION} to ${params.TARGET_ENV} validated successfully"
+                }
             }
         }
     }
