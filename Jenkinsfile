@@ -7,12 +7,17 @@ pipeline {
                 echo "Build: ${env.BUILD_NUMBER}"
                 script {
                     if (env.CHANGE_ID) {
-                        echo "This is Pull Request #${env.CHANGE_ID}: ${env.CHANGE_BRANCH} -> ${env.CHANGE_TARGET}"
+                        echo "Pull Request #${env.CHANGE_ID}: ${env.CHANGE_BRANCH} -> ${env.CHANGE_TARGET}"
                     } else {
                         echo "Direct branch build"
                     }
                 }
             }
         }
+        stage('Repo Check') {
+            steps {
+                sh 'python3 check.py'
+            }
+        }
     }
-}// webhook trigger test
+}
