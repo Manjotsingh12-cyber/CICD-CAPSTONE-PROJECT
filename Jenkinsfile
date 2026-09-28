@@ -3,42 +3,28 @@
 pipeline {
     agent none
     parameters {
-        choice(name: 'TARGET_ENV', choices: ['dev', 'qa'], description: 'Environment to deploy to')
+        choice(name: 'IMAGE',
+               choices: ['nginx:1.27', 'nginx:1.26', 'busybox:1.36'],
+               description: 'busybox = a deliberately broken release')
     }
     stages {
         stage('Banner') {
             agent any
-            steps {
-                buildBanner()
-                sayHello('Manjot')
-            }
+            steps { buildBanner() }
         }
-        stage('Compute Version') {
-            agent any
-            steps {
-                script {
-                    env.APP_VERSION = generateVersion(env.BUILD_NUMBER)
-                    echo "App version: ${env.APP_VERSION}"
-                }
-            }
+        stage('Security') {
+            agent { label 'sast' }
+            steps { securityScan(blockOnHighSeverity: true) }
         }
         stage('Deploy') {
             agent { label 'sast' }
             steps {
-                sh 'docker rm -f blue-green-test || true'
-                sh 'docker run -d --name blue-green-test -p 8005:80 nginx'
-                sh 'sleep 2'
-            }
-        }
-        stage('Validate') {
-            agent { label 'sast' }
-            steps {
-                script {
-                    if (!httpCheck('http://localhost:8005', 5)) {
-                        error("Validation failed for ${env.APP_VERSION}")
-                    }
-                    echo "Version ${env.APP_VERSION} validated on ${params.TARGET_ENV}"
-                }
+                deployWithRollback(
+                    name: 'blue-green-test',
+                    image: params.IMAGE,
+                    hostPort: 8005,
+                    containerPort: 80
+                )
             }
         }
     }
