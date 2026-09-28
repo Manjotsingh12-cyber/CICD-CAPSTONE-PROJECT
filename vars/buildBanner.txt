@@ -1,0 +1,2 @@
+Prints a one-line summary of the current build (job, number, branch).
+Usage: buildBanner()

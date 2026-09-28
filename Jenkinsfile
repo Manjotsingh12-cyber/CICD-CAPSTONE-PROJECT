@@ -3,16 +3,13 @@
 pipeline {
     agent none
     parameters {
-        choice(
-            name: 'TARGET_ENV',
-            choices: ['dev', 'qa'],
-            description: 'Environment to deploy to'
-        )
+        choice(name: 'TARGET_ENV', choices: ['dev', 'qa'], description: 'Environment to deploy to')
     }
     stages {
-        stage('Greet') {
+        stage('Banner') {
             agent any
             steps {
+                buildBanner()
                 sayHello('Manjot')
             }
         }
@@ -21,18 +18,8 @@ pipeline {
             steps {
                 script {
                     env.APP_VERSION = generateVersion(env.BUILD_NUMBER)
-                    echo "App version for this build: ${env.APP_VERSION}"
+                    echo "App version: ${env.APP_VERSION}"
                 }
-            }
-        }
-        stage('Show Deployment Info') {
-            agent any
-            steps {
-                deploymentInfo(
-                    environment: params.TARGET_ENV,
-                    port: 8005,
-                    version: env.APP_VERSION
-                )
             }
         }
         stage('Deploy') {
@@ -47,9 +34,8 @@ pipeline {
             agent { label 'sast' }
             steps {
                 script {
-                    def healthy = healthCheck('http://localhost:8005', 5)
-                    if (!healthy) {
-                        error("Validation failed for version ${env.APP_VERSION}")
+                    if (!httpCheck('http://localhost:8005', 5)) {
+                        error("Validation failed for ${env.APP_VERSION}")
                     }
                     echo "Version ${env.APP_VERSION} validated on ${params.TARGET_ENV}"
                 }
