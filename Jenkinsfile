@@ -57,14 +57,14 @@ pipeline {
             }
         }
         stage('Trivy Scan') {
-            agent { label 'sast' }
-            steps {
-                sh "trivy --cache-dir /mnt/trivy image \
-    --exit-code 0 \
-    --severity HIGH,CRITICAL \
-    billing-payment:${IMAGE_TAG}"
-            }
-        }
+    agent { label 'sast' }
+    steps {
+        sh "trivy --cache-dir /mnt/trivy image \
+            --exit-code 0 \
+            --severity HIGH,CRITICAL \
+            billing-payment:${env.GIT_SHA}"
+    }
+}
         stage('SBOM') {
             agent { label 'sast' }
             steps {
