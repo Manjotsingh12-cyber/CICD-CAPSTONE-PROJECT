@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>billing-payment dashboard</title>
+    <style>
+        body { font-family: monospace; background: #0d1117; color: #c9d1d9; padding: 40px; }
+        .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; max-width: 400px; }
+        .row { margin: 8px 0; }
+        .label { color: #8b949e; }
+        .ok { color: #3fb950; }
+        h2 { margin-top: 0; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>billing-payment</h2>
+        <div class="row"><span class="label">Status:</span> <span class="ok" id="status">checking...</span></div>
+        <div class="row"><span class="label">Version:</span> {{ version }}</div>
+        <div class="row"><span class="label">Git SHA:</span> {{ git_sha }}</div>
+        <div class="row"><span class="label">Build:</span> {{ build_number }}</div>
+        <div class="row"><span class="label">Environment:</span> {{ environment }}</div>
+    </div>
+    <script>
+        fetch("/health").then(r => r.json()).then(d => {
+            document.getElementById("status").innerText = d.status;
+        });
+    </script>
+</body>
+</html>
