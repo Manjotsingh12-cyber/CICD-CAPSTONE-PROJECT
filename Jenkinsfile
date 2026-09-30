@@ -31,6 +31,14 @@ pipeline {
                 }
             }
         }
+        stage('SonarQube Scan') {
+            agent { label 'ci' }
+            steps {
+                withSonarQubeEnv('sonar') {
+                    sh 'sonar-scanner -Dsonar.projectKey=billing-payment -Dsonar.sources=.'
+                }
+            }
+        }
         stage('Docker Build') {
             agent { label 'sast' }
             steps {
