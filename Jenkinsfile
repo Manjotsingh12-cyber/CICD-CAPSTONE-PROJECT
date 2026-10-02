@@ -18,7 +18,6 @@ pipeline {
     stages {
 
         stage('Checkout') {
-            agent { label 'ci' }
 
             steps {
                 checkout scm
