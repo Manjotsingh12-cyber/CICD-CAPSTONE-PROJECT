@@ -217,8 +217,9 @@ pipeline {
 
             steps {
                 sh '''
-                    rm -rf /mnt/trivy/zap-work/*
-                    mkdir -p /mnt/trivy/zap-work
+                    sudo rm -rf /mnt/trivy/zap-work
+                    sudo mkdir -p /mnt/trivy/zap-work
+                    sudo chmod 0777 /mnt/trivy/zap-work
 
                     ALB_DNS=$(cd /home/mbrar/terraform && \
                               terraform output -raw alb_dns_name)
