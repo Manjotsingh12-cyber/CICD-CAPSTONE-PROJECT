@@ -89,5 +89,25 @@ pipeline {
                 echo "Deployed and validated: ${env.APP_VERSION} (${env.GIT_SHA})"
             }
         }
+        stage('OWASP ZAP Scan') {
+    agent { label 'node-2' }
+
+    steps {
+        sh '''
+            docker run --rm \
+              --network host \
+              -v "$WORKSPACE:/zap/wrk/:rw" \
+              ghcr.io/zaproxy/zaproxy:stable \
+              zap-baseline.py \
+              -t http://10.100.4.10:8006 \
+              -r zap-report.html \
+              -J zap-report.json \
+              || true
+        '''
+
+        archiveArtifacts artifacts: 'zap-report.html,zap-report.json',
+                         allowEmptyArchive: true
+    }
+}
     }
 }
