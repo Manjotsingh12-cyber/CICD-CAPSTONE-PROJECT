@@ -13,3 +13,9 @@ variable "image_tag" {
   description = "Docker image tag to deploy (git SHA)"
   default     = "latest"
 }
+
+variable "image_tag" {
+  description = "Docker image tag (git SHA) to deploy"
+  type        = string
+  default     = "latest"
+}

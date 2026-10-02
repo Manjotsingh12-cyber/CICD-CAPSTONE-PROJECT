@@ -9,3 +9,7 @@ output "public_subnet_ids" {
 output "private_subnet_ids" {
   value = aws_subnet.private[*].id
 }
+output "app_url" {
+  description = "URL used by the smoke test"
+  value       = "http://${aws_instance.app.public_ip}:8000"
+}
