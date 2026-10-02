@@ -5,19 +5,16 @@ pipeline {
     agent none
 
     environment {
-        APP_NAME = 'billing-payment'
-        AWS_REGION = 'ap-south-1'
-
-        // Existing ECR repository created by Terraform
-        ECR_REPOSITORY = 'billing-payment'
-
-        // Existing Terraform directory on node-2
-        TERRAFORM_DIR = '/home/mbrar/terraform'
+        APP_NAME        = 'billing-payment'
+        AWS_REGION      = 'ap-south-1'
+        ECR_REPOSITORY  = 'billing-payment'
+        TERRAFORM_DIR   = '/home/mbrar/terraform'
     }
 
     stages {
 
         stage('Checkout') {
+            agent { label 'ci' }
 
             steps {
                 checkout scm
@@ -31,9 +28,12 @@ pipeline {
                     env.IMAGE_TAG = env.GIT_SHA
                     env.APP_VERSION = "0.1.${env.BUILD_NUMBER}"
 
-                    echo "Git SHA: ${env.GIT_SHA}"
-                    echo "Image tag: ${env.IMAGE_TAG}"
-                    echo "App version: ${env.APP_VERSION}"
+                    echo "========================================"
+                    echo "Application : ${env.APP_NAME}"
+                    echo "Git SHA     : ${env.GIT_SHA}"
+                    echo "Image Tag   : ${env.IMAGE_TAG}"
+                    echo "App Version : ${env.APP_VERSION}"
+                    echo "========================================"
                 }
             }
         }
@@ -43,6 +43,7 @@ pipeline {
 
             steps {
                 sh '''
+                    set -e
                     python3 -m pytest -q
                 '''
             }
@@ -99,11 +100,11 @@ pipeline {
         }
 
         stage('Container Security') {
-            agent { label 'ci' }
-
             parallel {
 
                 stage('Trivy') {
+                    agent { label 'ci' }
+
                     steps {
                         trivyScan(
                             image: "${APP_NAME}:${IMAGE_TAG}"
@@ -112,6 +113,8 @@ pipeline {
                 }
 
                 stage('SBOM') {
+                    agent { label 'ci' }
+
                     steps {
                         sbomGenerate(
                             image: "${APP_NAME}:${IMAGE_TAG}"
@@ -138,6 +141,7 @@ pipeline {
 
             steps {
                 vaultAwsCreds {
+
                     terraformPlan(
                         terraformDir: "${TERRAFORM_DIR}",
                         imageTag: "${IMAGE_TAG}"
@@ -151,6 +155,7 @@ pipeline {
 
             steps {
                 vaultAwsCreds {
+
                     terraformApply(
                         terraformDir: "${TERRAFORM_DIR}",
                         imageTag: "${IMAGE_TAG}"
@@ -177,7 +182,8 @@ pipeline {
         success {
             echo """
             ========================================
-            BUILD SUCCESSFUL
+                     BUILD SUCCESSFUL
+            ========================================
             Application : ${APP_NAME}
             Git SHA     : ${GIT_SHA}
             Image Tag   : ${IMAGE_TAG}
@@ -189,9 +195,11 @@ pipeline {
         failure {
             echo """
             ========================================
-            BUILD FAILED
+                       BUILD FAILED
+            ========================================
             Application : ${APP_NAME}
             Git SHA     : ${GIT_SHA}
+            Image Tag   : ${IMAGE_TAG}
             ========================================
             """
         }
