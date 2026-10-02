@@ -79,7 +79,7 @@ pipeline {
                     agent { label 'sast' }
 
                     steps {
-                        withSonarQubeEnv('sonarqube') {
+                        withSonarQubeEnv('sonar') {
                             sh '''
                                 sonar-scanner \
                                   -Dsonar.projectKey=billing-payment \
