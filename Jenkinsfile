@@ -1,96 +1,207 @@
+@Library('company-shared-lib') _
+
 pipeline {
+
     agent none
+
+    environment {
+        APP_NAME = 'billing-payment'
+        AWS_REGION = 'ap-south-1'
+
+        // Existing ECR repository created by Terraform
+        ECR_REPOSITORY = 'billing-payment'
+
+        // Existing Terraform directory on node-2
+        TERRAFORM_DIR = '/home/mbrar/terraform'
+    }
+
     stages {
+
+        stage('Checkout') {
+            agent { label 'ci' }
+
+            steps {
+                checkout scm
+
+                script {
+                    env.GIT_SHA = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+
+                    env.IMAGE_TAG = env.GIT_SHA
+                    env.APP_VERSION = "0.1.${env.BUILD_NUMBER}"
+
+                    echo "Git SHA: ${env.GIT_SHA}"
+                    echo "Image tag: ${env.IMAGE_TAG}"
+                    echo "App version: ${env.APP_VERSION}"
+                }
+            }
+        }
+
         stage('Test') {
             agent { label 'ci' }
+
             steps {
-                sh 'pip3 install -r requirements.txt --break-system-packages || true'
-                echo "No unit tests yet - placeholder stage"
+                sh '''
+                    python3 -m pytest -q
+                '''
             }
         }
-        stage('SAST') {
-            agent { label 'ci' }
-            steps {
-                sh 'bandit -r . -f txt -o bandit-report.txt --exit-zero'
-                sh 'cat bandit-report.txt'
-            }
-            post {
-                always {
-                    archiveArtifacts artifacts: 'bandit-report.txt', allowEmptyArchive: true
+
+        stage('Security Scans') {
+            parallel {
+
+                stage('Bandit') {
+                    agent { label 'sast' }
+
+                    steps {
+                        banditScan()
+                    }
+                }
+
+                stage('Gitleaks') {
+                    agent { label 'sast' }
+
+                    steps {
+                        gitleaksScan()
+                    }
+                }
+
+                stage('SonarQube') {
+                    agent { label 'sast' }
+
+                    steps {
+                        sonarScan()
+                    }
+                }
+
+                stage('OWASP ZAP') {
+                    agent { label 'sast' }
+
+                    steps {
+                        owaspScan()
+                    }
                 }
             }
         }
-        stage('Secret Scan') {
-            agent { label 'ci' }
-            steps {
-                sh 'gitleaks detect --source . --report-path gitleaks-report.json'
-            }
-            post {
-                always {
-                    archiveArtifacts artifacts: 'gitleaks-report.json', allowEmptyArchive: true
-                }
-            }
-        }
-        stage('SonarQube Scan') {
-            agent { label 'ci' }
-            steps {
-                withSonarQubeEnv('sonar') {
-                    sh 'sonar-scanner -Dsonar.projectKey=billing-payment -Dsonar.sources=.'
-                }
-            }
-        }
+
         stage('Docker Build') {
-            agent { label 'sast' }
+            agent { label 'ci' }
+
             steps {
-                script {
-                    def gitSha = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-                    env.GIT_SHA = gitSha
-                    env.APP_VERSION = "0.1.${env.BUILD_NUMBER}"
-                }
-                sh """
-                    docker build \
-                      --build-arg GIT_SHA=${env.GIT_SHA} \
-                      --build-arg BUILD_NUMBER=${env.BUILD_NUMBER} \
-                      --build-arg APP_VERSION=${env.APP_VERSION} \
-                      -t billing-payment:${env.GIT_SHA} .
-                """
+                dockerBuild(
+                    image: "${APP_NAME}:${IMAGE_TAG}",
+                    gitSha: "${GIT_SHA}",
+                    buildNumber: "${BUILD_NUMBER}",
+                    appVersion: "${APP_VERSION}"
+                )
             }
         }
-        stage('Trivy Scan') {
-    agent { label 'sast' }
-    steps {
-        sh "trivy --cache-dir /mnt/trivy image \
-            --exit-code 0 \
-            --severity HIGH,CRITICAL \
-            billing-payment:${env.GIT_SHA}"
+
+        stage('Container Security') {
+            agent { label 'ci' }
+
+            parallel {
+
+                stage('Trivy') {
+                    steps {
+                        trivyScan(
+                            image: "${APP_NAME}:${IMAGE_TAG}"
+                        )
+                    }
+                }
+
+                stage('SBOM') {
+                    steps {
+                        sbomGenerate(
+                            image: "${APP_NAME}:${IMAGE_TAG}"
+                        )
+                    }
+                }
+            }
+        }
+
+        stage('Push Image to ECR') {
+            agent { label 'ci' }
+
+            steps {
+                dockerPush(
+                    image: "${APP_NAME}:${IMAGE_TAG}",
+                    repository: "${ECR_REPOSITORY}",
+                    region: "${AWS_REGION}"
+                )
+            }
+        }
+
+        stage('Terraform Plan') {
+            agent { label 'node-2' }
+
+            steps {
+                vaultAwsCreds {
+                    terraformPlan(
+                        terraformDir: "${TERRAFORM_DIR}",
+                        imageTag: "${IMAGE_TAG}"
+                    )
+                }
+            }
+        }
+
+        stage('Terraform Apply / Deploy ECS') {
+            agent { label 'node-2' }
+
+            steps {
+                vaultAwsCreds {
+                    terraformApply(
+                        terraformDir: "${TERRAFORM_DIR}",
+                        imageTag: "${IMAGE_TAG}"
+                    )
+                }
+            }
+        }
+
+        stage('Validate ECS Deployment') {
+            agent { label 'node-2' }
+
+            steps {
+                ecsHealthCheck(
+                    terraformDir: "${TERRAFORM_DIR}",
+                    expectedVersion: "${GIT_SHA}",
+                    region: "${AWS_REGION}"
+                )
+            }
+        }
     }
-}
-        stage('SBOM') {
-            agent { label 'sast' }
-            steps {
-                sh "syft billing-payment:${env.GIT_SHA} -o json > sbom.json"
-            }
-            post {
-                always {
-                    archiveArtifacts artifacts: 'sbom.json', allowEmptyArchive: true
-                }
-            }
+
+    post {
+
+        success {
+            echo """
+            ========================================
+            BUILD SUCCESSFUL
+            Application : ${APP_NAME}
+            Git SHA     : ${GIT_SHA}
+            Image Tag   : ${IMAGE_TAG}
+            Version     : ${APP_VERSION}
+            ========================================
+            """
         }
-        stage('Deploy') {
-            agent { label 'sast' }
-            steps {
-                sh 'docker rm -f billing-payment-dev || true'
-                sh "docker run -d --name billing-payment-dev -p 8006:8000 billing-payment:${env.GIT_SHA}"
-                sh 'sleep 3'
-            }
+
+        failure {
+            echo """
+            ========================================
+            BUILD FAILED
+            Application : ${APP_NAME}
+            Git SHA     : ${GIT_SHA}
+            ========================================
+            """
         }
-        stage('Validate') {
-            agent { label 'sast' }
-            steps {
-                sh 'curl -sf http://localhost:8006/health'
-                sh 'curl -sf http://localhost:8006/version'
-                echo "Deployed and validated: ${env.APP_VERSION} (${env.GIT_SHA})"
-            }
+
+        always {
+            archiveArtifacts(
+                artifacts: '**/sbom*.json, **/trivy*.json',
+                allowEmptyArchive: true
+            )
         }
     }
 }
