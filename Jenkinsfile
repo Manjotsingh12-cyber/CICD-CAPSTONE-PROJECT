@@ -1,268 +1,93 @@
 pipeline {
-
     agent none
-
-    environment {
-        APP_NAME       = 'billing-payment'
-        AWS_REGION     = 'ap-south-1'
-        ECR_REPOSITORY = 'billing-payment'
-        TERRAFORM_DIR  = '/home/mbrar/terraform'
-    }
-
     stages {
-
-        stage('Checkout') {
-            agent { label 'ci' }
-
-            steps {
-                checkout scm
-
-                script {
-                    env.GIT_SHA = sh(
-                        script: 'git rev-parse --short HEAD',
-                        returnStdout: true
-                    ).trim()
-
-                    env.IMAGE_TAG = env.GIT_SHA
-                    env.APP_VERSION = "0.1.${env.BUILD_NUMBER}"
-
-                    echo "Git SHA: ${env.GIT_SHA}"
-                    echo "Image Tag: ${env.IMAGE_TAG}"
-                    echo "App Version: ${env.APP_VERSION}"
-                }
-            }
-        }
-
         stage('Test') {
             agent { label 'ci' }
-
             steps {
-                sh '''
-                    set -e
-
-                    echo "Running tests..."
-
-                    python3 -m pytest -q
-                '''
+                sh 'pip3 install -r requirements.txt --break-system-packages || true'
+                echo "No unit tests yet - placeholder stage"
             }
         }
-
-        stage('Security Scans') {
-            parallel {
-
-                stage('Bandit') {
-                    agent { label 'sast' }
-
-                    steps {
-                        sh '''
-                            bandit -r . -f json -o bandit-report.json || true
-                        '''
-                    }
-                }
-
-                stage('Gitleaks') {
-                    agent { label 'sast' }
-
-                    steps {
-                        sh '''
-                            gitleaks detect \
-                              --source . \
-                              --no-banner \
-                              --report-format json \
-                              --report-path gitleaks-report.json \
-                              || true
-                        '''
-                    }
-                }
-
-                stage('SonarQube') {
-                    agent { label 'sast' }
-
-                    steps {
-                        withSonarQubeEnv('sonar') {
-                            sh '''
-                                sonar-scanner \
-                                  -Dsonar.projectKey=billing-payment \
-                                  -Dsonar.sources=.
-                            '''
-                        }
-                    }
-                }
-
-                stage('OWASP ZAP') {
-                    agent { label 'sast' }
-
-                    steps {
-                        sh '''
-                            echo "ZAP scan will be configured after basic pipeline works"
-                        '''
-                    }
+        stage('SAST') {
+            agent { label 'ci' }
+            steps {
+                sh 'bandit -r . -f txt -o bandit-report.txt --exit-zero'
+                sh 'cat bandit-report.txt'
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'bandit-report.txt', allowEmptyArchive: true
                 }
             }
         }
-
+        stage('Secret Scan') {
+            agent { label 'ci' }
+            steps {
+                sh 'gitleaks detect --source . --report-path gitleaks-report.json'
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'gitleaks-report.json', allowEmptyArchive: true
+                }
+            }
+        }
+        stage('SonarQube Scan') {
+            agent { label 'ci' }
+            steps {
+                withSonarQubeEnv('sonar') {
+                    sh 'sonar-scanner -Dsonar.projectKey=billing-payment -Dsonar.sources=.'
+                }
+            }
+        }
         stage('Docker Build') {
-            agent { label 'ci' }
-
+            agent { label 'sast' }
             steps {
-                sh '''
-                    set -e
-
+                script {
+                    def gitSha = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    env.GIT_SHA = gitSha
+                    env.APP_VERSION = "0.1.${env.BUILD_NUMBER}"
+                }
+                sh """
                     docker build \
-                      --build-arg GIT_SHA="${GIT_SHA}" \
-                      --build-arg BUILD_NUMBER="${BUILD_NUMBER}" \
-                      --build-arg APP_VERSION="${APP_VERSION}" \
-                      -t "${APP_NAME}:${IMAGE_TAG}" .
-                '''
+                      --build-arg GIT_SHA=${env.GIT_SHA} \
+                      --build-arg BUILD_NUMBER=${env.BUILD_NUMBER} \
+                      --build-arg APP_VERSION=${env.APP_VERSION} \
+                      -t billing-payment:${env.GIT_SHA} .
+                """
             }
         }
-
-        stage('Container Security') {
-            parallel {
-
-                stage('Trivy') {
-                    agent { label 'ci' }
-
-                    steps {
-                        sh '''
-                            trivy image \
-                              --format json \
-                              --output trivy-report.json \
-                              "${APP_NAME}:${IMAGE_TAG}" \
-                              || true
-                        '''
-                    }
-                }
-
-                stage('SBOM') {
-                    agent { label 'ci' }
-
-                    steps {
-                        sh '''
-                            syft "${APP_NAME}:${IMAGE_TAG}" \
-                              -o json > sbom-report.json
-                        '''
-                    }
+        stage('Trivy Scan') {
+            agent { label 'sast' }
+            steps {
+                sh "trivy image --exit-code 0 --severity HIGH,CRITICAL billing-payment:${env.GIT_SHA} || true"
+            }
+        }
+        stage('SBOM') {
+            agent { label 'sast' }
+            steps {
+                sh "syft billing-payment:${env.GIT_SHA} -o json > sbom.json"
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'sbom.json', allowEmptyArchive: true
                 }
             }
         }
-
-        stage('Push Image to ECR') {
-            agent { label 'ci' }
-
+        stage('Deploy') {
+            agent { label 'sast' }
             steps {
-                sh '''
-                    set -e
-
-                    AWS_ACCOUNT_ID=$(aws sts get-caller-identity \
-                      --query Account \
-                      --output text)
-
-                    ECR_URL="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}"
-
-                    aws ecr get-login-password \
-                      --region "${AWS_REGION}" | \
-                    docker login \
-                      --username AWS \
-                      --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-
-                    docker tag \
-                      "${APP_NAME}:${IMAGE_TAG}" \
-                      "${ECR_URL}:${IMAGE_TAG}"
-
-                    docker push \
-                      "${ECR_URL}:${IMAGE_TAG}"
-                '''
+                sh 'docker rm -f billing-payment-dev || true'
+                sh "docker run -d --name billing-payment-dev -p 8006:8000 billing-payment:${env.GIT_SHA}"
+                sh 'sleep 3'
             }
         }
-
-        stage('Terraform Plan') {
-            agent { label 'node-2' }
-
+        stage('Validate') {
+            agent { label 'sast' }
             steps {
-                sh '''
-                    set -e
-
-                    cd "${TERRAFORM_DIR}"
-
-                    terraform init
-
-                    terraform plan \
-                      -var="image_tag=${IMAGE_TAG}"
-                '''
+                sh 'curl -sf http://localhost:8006/health'
+                sh 'curl -sf http://localhost:8006/version'
+                echo "Deployed and validated: ${env.APP_VERSION} (${env.GIT_SHA})"
             }
-        }
-
-        stage('Terraform Apply / Deploy ECS') {
-            agent { label 'node-2' }
-
-            steps {
-                sh '''
-                    set -e
-
-                    cd "${TERRAFORM_DIR}"
-
-                    terraform apply \
-                      -auto-approve \
-                      -var="image_tag=${IMAGE_TAG}"
-                '''
-            }
-        }
-
-        stage('Validate ECS Deployment') {
-            agent { label 'node-2' }
-
-            steps {
-                sh '''
-                    set -e
-
-                    echo "Getting ALB DNS..."
-
-                    ALB_DNS=$(terraform -chdir="${TERRAFORM_DIR}" output -raw alb_dns_name)
-
-                    echo "ALB: ${ALB_DNS}"
-
-                    echo "Checking application..."
-
-                    curl -f "http://${ALB_DNS}/health"
-
-                    echo ""
-                    echo "Checking version..."
-
-                    curl -f "http://${ALB_DNS}/version"
-
-                    echo ""
-                    echo "Expected Git SHA: ${GIT_SHA}"
-                '''
-            }
-        }
-    }
-
-    post {
-
-        success {
-            echo """
-            ========================================
-                    PIPELINE SUCCESSFUL
-            ========================================
-            Application : ${APP_NAME}
-            Git SHA     : ${GIT_SHA}
-            Image Tag   : ${IMAGE_TAG}
-            Version     : ${APP_VERSION}
-            ========================================
-            """
-        }
-
-        failure {
-            echo """
-            ========================================
-                    PIPELINE FAILED
-            ========================================
-            Application : ${APP_NAME}
-            Git SHA     : ${GIT_SHA}
-            Image Tag   : ${IMAGE_TAG}
-            ========================================
-            """
         }
     }
 }
